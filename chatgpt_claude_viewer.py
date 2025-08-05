@@ -1,22 +1,24 @@
 import tkinter as tk
-from tkinter import scrolledtext
+from tkinter import ttk, scrolledtext
 import os
 import time
 from threading import Thread
 
-# ファイルパス
-CLAUDE_FILE = "claude_output.txt"
+# Claude出力ファイルとChatGPTログのマッピング
+FILES = {
+    "writer": "output_claude_writer.txt",
+    "idea": "output_claude_idea.txt",
+    "proof": "output_claude_proof.txt"
+}
 LOG_FILE = "response_log.txt"
 
-# Claudeの出力を読む
-def read_claude():
+def read_file(file_path):
     try:
-        with open(CLAUDE_FILE, "r", encoding="utf-8") as f:
-            return f.read()
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read().strip()
     except:
-        return "❌ claude_output.txt が見つかりません。"
+        return f"❌ {file_path} が見つかりません。"
 
-# ChatGPTの最新応答を読む（ログの最後の返答のみ）
 def read_latest_chatgpt():
     try:
         with open(LOG_FILE, "r", encoding="utf-8") as f:
@@ -31,43 +33,52 @@ def read_latest_chatgpt():
     except:
         return "❌ response_log.txt が見つかりません。"
 
-# GUI更新ループ
-def update_loop(claude_textbox, chatgpt_textbox):
-    last_claude, last_gpt = "", ""
+def update_loop(textboxes):
+    last_contents = {k: "" for k in FILES}
+    last_gpt = ""
     while True:
-        current_claude = read_claude()
-        current_gpt = read_latest_chatgpt()
-        if current_claude != last_claude:
-            claude_textbox.config(state="normal")
-            claude_textbox.delete("1.0", tk.END)
-            claude_textbox.insert(tk.END, current_claude)
-            claude_textbox.config(state="disabled")
-            last_claude = current_claude
-        if current_gpt != last_gpt:
-            chatgpt_textbox.config(state="normal")
-            chatgpt_textbox.delete("1.0", tk.END)
-            chatgpt_textbox.insert(tk.END, current_gpt)
-            chatgpt_textbox.config(state="disabled")
-            last_gpt = current_gpt
+        for name, file_path in FILES.items():
+            content = read_file(file_path)
+            if content != last_contents[name]:
+                textbox = textboxes[name]
+                textbox.config(state="normal")
+                textbox.delete("1.0", tk.END)
+                textbox.insert(tk.END, content)
+                textbox.config(state="disabled")
+                last_contents[name] = content
+        gpt = read_latest_chatgpt()
+        if gpt != last_gpt:
+            textbox = textboxes["gpt"]
+            textbox.config(state="normal")
+            textbox.delete("1.0", tk.END)
+            textbox.insert(tk.END, gpt)
+            textbox.config(state="disabled")
+            last_gpt = gpt
         time.sleep(2)
 
-# メインGUI
 def launch_gui():
     root = tk.Tk()
     root.title("Claude & ChatGPT Viewer")
 
-    # レイアウト
-    tk.Label(root, text="Claudeの出力", font=("Arial", 12, "bold")).grid(row=0, column=0, padx=10, pady=5)
-    tk.Label(root, text="ChatGPTの応答", font=("Arial", 12, "bold")).grid(row=0, column=1, padx=10, pady=5)
+    notebook = ttk.Notebook(root)
+    notebook.pack(expand=True, fill='both')
 
-    claude_textbox = scrolledtext.ScrolledText(root, wrap=tk.WORD, width=60, height=30, state="disabled")
-    claude_textbox.grid(row=1, column=0, padx=10, pady=5)
+    textboxes = {}
 
-    chatgpt_textbox = scrolledtext.ScrolledText(root, wrap=tk.WORD, width=60, height=30, state="disabled")
-    chatgpt_textbox.grid(row=1, column=1, padx=10, pady=5)
+    for name, file in FILES.items():
+        frame = ttk.Frame(notebook)
+        notebook.add(frame, text=f"Claude：{name}")
+        textbox = scrolledtext.ScrolledText(frame, wrap=tk.WORD, width=80, height=30, state="disabled")
+        textbox.pack(padx=10, pady=10, expand=True, fill='both')
+        textboxes[name] = textbox
 
-    # 監視スレッド起動
-    thread = Thread(target=update_loop, args=(claude_textbox, chatgpt_textbox), daemon=True)
+    gpt_frame = ttk.Frame(notebook)
+    notebook.add(gpt_frame, text="ChatGPT応答")
+    gpt_box = scrolledtext.ScrolledText(gpt_frame, wrap=tk.WORD, width=80, height=30, state="disabled")
+    gpt_box.pack(padx=10, pady=10, expand=True, fill='both')
+    textboxes["gpt"] = gpt_box
+
+    thread = Thread(target=update_loop, args=(textboxes,), daemon=True)
     thread.start()
 
     root.mainloop()

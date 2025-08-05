@@ -23,11 +23,5 @@ def main():
     print("=== ChatGPT CLI（v1対応） ===")
     while True:
         user_input = input("\nあなた > ")
-        if user_input.lower() in ["exit", "quit"]:
-            print("終了します。")
-            break
-        reply = ask_chatgpt(user_input)
-        print(f"\nChatGPT > {reply}")
 
-if __name__ == "__main__":
-    main()
+        # 🔽 Claude→ChatGPT連携用に書き出す処理を追加
