@@ -16,7 +16,29 @@ try:
 except Exception:  # 依存が無い場合でも起動は継続（JSONだけ読み込む）
     yaml = None  # type: ignore
 
-load_dotenv()
+# .env を確実に読み込む（playground/.env と リポジトリ直下の .env の両方を試行）
+def _load_dotenv_multi() -> None:
+    try:
+        # 1) 現在の作業ディレクトリから上位へ探索
+        load_dotenv(override=False)
+    except Exception:
+        pass
+    try:
+        # 2) playground/.env（backend の親）
+        p1 = (Path(__file__).resolve().parent.parent / ".env")
+        if p1.exists():
+            load_dotenv(p1, override=False)
+    except Exception:
+        pass
+    try:
+        # 3) リポジトリ直下 .env（backend の親の親の親）
+        p2 = (Path(__file__).resolve().parents[2] / ".env")
+        if p2.exists():
+            load_dotenv(p2, override=False)
+    except Exception:
+        pass
+
+_load_dotenv_multi()
 app = FastAPI(title="Motivator Orchestrator Playground")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -195,10 +217,10 @@ KEYMAP = [
 ]
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL","gpt-4o-mini")
-# 他プロバイダの環境変数
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+# 他プロバイダの環境変数（.env の別名キーも吸収）
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-pro")
 # Web検索APIキー（任意）
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
@@ -406,6 +428,12 @@ def _ack_for_conv(conv_id: str, text: str) -> str:
     同一会話での直近重複を避ける。
     ORCHSET.acks に上書きがあれば優先（空文字は無視）。
     """
+    # グローバル抑制: 設定でサマリーを出さない場合や acks が空の場合は相槌を出さない
+    try:
+        if ORCHSET.get("summary_style") == "none" or not (ORCHSET.get("acks") or {}):
+            return ""
+    except Exception:
+        pass
     # 質問メッセージの場合は相槌を出さず、統括が直接回答する
     t = (text or "").strip()
     if not t:
@@ -670,7 +698,22 @@ def _orchestrator_main_reply(conv_id: str, text: str) -> str:
             _remember_key(conv_id, f"orch:{cat}:plan")
             return cand
 
-    # ここまで該当しない場合は軽い支援提案（重複を避けつつ）
+    # ここまで該当しない場合は、LLM（統括ロール）に自由文で相談して返す
+    try:
+        ctx = _recent_main_context(conv_id, 6)
+        user_text2 = t
+        if ctx:
+            user_text2 = t + "\n\n参考（直近のやり取り）:\n" + ctx
+        # 利用可能ならカスタムの動的統括ロールを優先し、なければ既存の motivator_ai を使う
+        dyn_id = "motivator_ai_dynamic" if "motivator_ai_dynamic" in ROLES_BY_ID else "motivator_ai"
+        resp = (consult(dyn_id, user_text2) or "").strip()
+        # モック応答（API未設定など）の場合はテンプレートにフォールバック
+        if resp and not resp.startswith("（モック"):
+            return resp
+    except Exception:
+        pass
+
+    # フォールバック: 既存の軽い支援テンプレート（重複を避けつつ）
     tpl = ORCH_MAIN_TEMPLATES.get(cat, ORCH_MAIN_TEMPLATES["general"])[:]
     base = (sum(ord(c) for c in t) + len(ACK_HISTORY.get(conv_id, [])))
     used = _recent_keys(conv_id, f"orch:{cat}:")
@@ -861,7 +904,7 @@ def select_specialists(text: str, limit: int) -> List[str]:
         return roles[:limit]
 
     # 「多くの担当者」依頼の検出で上限を拡張
-    many_keywords = ["多くの担当者", "多人数", "たくさんの意見", "幅広く", "多数のAI", "多方面"]
+    many_keywords = ["多くの担当者", "多人数", "たくさんの意見", "幅広く", "多数のAI", "多方面", "多数意見", "多意見", "多様な視点"]
     if any(k in text for k in many_keywords):
         limit = max(limit, 8)
     hits = []
@@ -876,8 +919,13 @@ def select_specialists(text: str, limit: int) -> List[str]:
         if r not in dedup:
             dedup.append(r)
     if not dedup:
-        # 初期状態での自動選定は行わない（統括のみを既定に）
-        dedup = []
+        # キーワードに当たらないが「多数意見」を求めている場合は推奨ロールから広めに選出
+        if any(k in text for k in many_keywords):
+            base = _all_consult_roles()
+            dedup = [r for r in base if r not in EXCLUDE_AUTO_ROLES][:max(limit, 8)]
+        else:
+            # 初期状態での自動選定は行わない（統括のみを既定に）
+            dedup = []
     # カスタムロールは自動選定に含めない（明示言及でのみ参加）
     return dedup[:limit]
 
@@ -1474,7 +1522,14 @@ def api_message(payload: MessageRequest):
         low = t.lower()
         verbs = ["参加させて","参加させる","参加して","呼んで","呼ぶ","招待","加えて","加わって","入れて"]
         if not any(v in t for v in verbs):
-            return None
+            # 明示の動詞がなくても『多数意見/多くの担当/広く意見を集めたい』等の意思があれば解釈
+            many_intent = any(k in t for k in ["多数意見","多くの担当者","多人数","幅広く","広く意見","多様な視点","たくさんの意見"]) or (
+                ("意見" in t and any(k in t for k in ["多く","多数","幅広く","広く"]))
+            )
+            if not many_intent:
+                return None
+            # 多数意見 intent として扱い、mentions は空のまま返す
+            return {"mentions": [], "generic": True, "many_intent": True}
         mentions = _extract_mentions(t)
         generic = ("専門スタッフ" in t) or ("スタッフ" in t) or ("担当" in t)
         return {"mentions": mentions, "generic": generic}
