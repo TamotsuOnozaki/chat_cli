@@ -1,4 +1,6 @@
 import os, json, uuid, glob, re
+# NOTE: ランタイムは .venv に依存パッケージがインストール済み（run.ps1 が pip install 済み）。
+# VS Code 上の未解決インポートは .vscode/settings.json の python.defaultInterpreterPath 設定で解消します。
 import requests
 from bs4 import BeautifulSoup  # type: ignore
 from pathlib import Path
@@ -133,6 +135,8 @@ ORCH_ONLY: Dict[str, bool] = {}
 ACK_HISTORY: Dict[str, List[str]] = {}
 # 使用したテンプレートキーの履歴（重複パターン回避用）
 ACK_KEY_HISTORY: Dict[str, List[str]] = {}
+# レーンごとの直近発言履歴（統括Mのみ、重複監視に使用）
+LANE_HISTORY: Dict[str, List[str]] = {}
 
 def now_iso(): return datetime.utcnow().isoformat()+"Z"
 
@@ -140,6 +144,22 @@ def push_event(conv_id: str, role: str, text: str, lane: str = "main"):
     global NEXT_EID
     ev = {"id": NEXT_EID, "conv_id": conv_id, "role": role, "text": text, "ts": now_iso(), "lane": lane}
     EVENTS.append(ev); NEXT_EID += 1; return ev
+
+def _lane_key(conv_id: str, lane: str) -> str:
+    return f"{conv_id}|{lane}"
+
+def _remember_lane(conv_id: str, lane: str, text: str) -> None:
+    key = _lane_key(conv_id, lane)
+    hist = LANE_HISTORY.setdefault(key, [])
+    t = (text or "").strip()
+    if not t:
+        return
+    hist.append(t)
+    if len(hist) > 8:
+        del hist[:-8]
+
+def _recent_lane_texts(conv_id: str, lane: str) -> List[str]:
+    return list(LANE_HISTORY.get(_lane_key(conv_id, lane), []) or [])
 
 def _members_of(conv_id: str) -> List[str]:
     return CONV_MEMBERS.get(conv_id, [])
@@ -277,12 +297,17 @@ def _load_orchset() -> None:
                 if isinstance(data, dict):
                     ORCHSET.update(data)
         # 型・範囲の軽い正規化
-        ft = ORCHSET.get("followup_turns")
-        try:
-            ft = int(ft)
-        except Exception:
-            ft = FOLLOWUP_TURNS_DEFAULT
-        ORCHSET["followup_turns"] = max(1, min(8, int(ft)))
+        ft_raw = ORCHSET.get("followup_turns", FOLLOWUP_TURNS_DEFAULT)
+        if isinstance(ft_raw, int):
+            ft_norm = ft_raw
+        elif isinstance(ft_raw, str):
+            try:
+                ft_norm = int(ft_raw)
+            except Exception:
+                ft_norm = FOLLOWUP_TURNS_DEFAULT
+        else:
+            ft_norm = FOLLOWUP_TURNS_DEFAULT
+        ORCHSET["followup_turns"] = max(1, min(8, int(ft_norm)))
         if ORCHSET.get("summary_style") not in ("default","short","none"):
             ORCHSET["summary_style"] = "default"
         if not isinstance(ORCHSET.get("acks"), dict):
@@ -509,7 +534,6 @@ def _orchestrator_main_reply(conv_id: str, text: str) -> str:
         for ch in t:
             if ch in num_map:
                 n = num_map[ch]; break
-        import re
         m = re.search(r"(\d{1,2})", t)
         if m:
             n = int(m.group(1))
@@ -531,6 +555,42 @@ def _orchestrator_main_reply(conv_id: str, text: str) -> str:
         _remember_ack(conv_id, cand)
         _remember_key(conv_id, f"orch:{cat}:agenda:{len(candidates)}")
         return cand
+
+    # 3) 直前に列挙した候補から『この中でどれ？』に直接答える
+    if ("この中で" in t or "どれが" in t or "どれですか" in t or "どちら" in t) and ("?" in t or "？" in t):
+        # 直近の統括メッセージから箇条書きを抽出
+        bullets: list[str] = []
+        for e in reversed(EVENTS):
+            if e.get("conv_id") != conv_id:
+                continue
+            if e.get("lane") != "main" or e.get("role") != "motivator_ai":
+                continue
+            txt0 = (e.get("text") or "").strip()
+            if "\n- " in txt0 or txt0.startswith("- "):
+                for l in txt0.splitlines():
+                    l = l.strip()
+                    if l.startswith("- "):
+                        bullets.append(l[2:].strip())
+                if bullets:
+                    break
+        if bullets:
+            def _score_ai(s: str) -> int:
+                low = s.lower()
+                score = 0
+                for kw in ["AI","AI事業","生成AI","機械学習","自動化","モデル","推論","データ","計測","可観測","タグ","GA4","広告","キャンペーン","LP","CV","CVR","CPA"]:
+                    if kw.lower() in low or kw in s:
+                        score += 1
+                return score
+            if any(k in t for k in ["AI","AI事業","AI関連","生成AI","機械学習"]):
+                best = max(bullets, key=_score_ai)
+                reason = "AI/データ/自動化と結び付けやすく、効果検証までの距離が近いからです"
+            else:
+                best = bullets[0]
+                reason = "小さく始めやすく、短期間で学びが得られるからです"
+            cand = f"この中なら『{best}』を推します。理由: {reason}。次の一歩を決めましょう。"
+            _remember_ack(conv_id, cand)
+            _remember_key(conv_id, f"orch:{cat}:pick")
+            return cand
 
     def _is_question(msg: str) -> bool:
         m = msg or ""
@@ -836,7 +896,7 @@ def call_anthropic(system_prompt: str, user_text: str) -> str:
     if not ANTHROPIC_API_KEY:
         return "（モック: Anthropic/Claude）設定が未構成です。"
     try:
-        from anthropic import Anthropic
+        from anthropic import Anthropic  # type: ignore[reportMissingImports]
         client = Anthropic(api_key=ANTHROPIC_API_KEY)
         resp = client.messages.create(
             model=ANTHROPIC_MODEL,
@@ -845,7 +905,7 @@ def call_anthropic(system_prompt: str, user_text: str) -> str:
             system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
-        parts = []
+        parts: list[str] = []
         for c in getattr(resp, "content", []) or []:
             if getattr(c, "type", "") == "text":
                 parts.append(getattr(c, "text", ""))
@@ -858,11 +918,11 @@ def call_gemini(system_prompt: str, user_text: str) -> str:
     if not GEMINI_API_KEY:
         return "（モック: Gemini）設定が未構成です。"
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel(GEMINI_MODEL)
+        import google.generativeai as genai  # type: ignore[reportMissingImports]
+        genai.configure(api_key=GEMINI_API_KEY)  # type: ignore[attr-defined]
+        model = genai.GenerativeModel(GEMINI_MODEL)  # type: ignore[attr-defined]
         prompt = f"[SYSTEM]\n{system_prompt}\n[/SYSTEM]\n\n{user_text}"
-        resp = model.generate_content(prompt)
+        resp = model.generate_content(prompt)  # type: ignore[attr-defined]
         text = getattr(resp, "text", "")
         return (text or "").strip() or "（Gemini応答が空でした）"
     except Exception as e:
@@ -1157,6 +1217,19 @@ def _gen_reason_from(text: str) -> str:
     # 2つまでに圧縮
     return "、".join(reasons[:2])
 
+SUMMARY_PREFIXES = [
+    "現時点の状況整理です。各担当から1案ずつ提案を受け、統括Mが要点を束ねました。",
+    "いったんのまとめです。各担当の提案を要点で束ねました。",
+    "ここまでの整理です。提案の要点を短く集約しました。",
+]
+
+def _pick_summary_prefix(conv_id: str) -> str:
+    used = _recent_lane_texts(conv_id, "main")
+    for pref in SUMMARY_PREFIXES:
+        if pref not in used:
+            return pref
+    return SUMMARY_PREFIXES[0]
+
 def motivate_summary(role_ids: List[str], role_to_last: Dict[str, str], role_initial: Dict[str, str] | None = None, role_clar: Dict[str, Dict[str, str]] | None = None) -> str:
     # 固定句ではなく、自然な現状報告＋採用案の明示にする
     bullets: List[str] = []
@@ -1220,7 +1293,8 @@ def motivate_summary(role_ids: List[str], role_to_last: Dict[str, str], role_ini
         reason = _gen_reason_from(best_text)
         adoption = f"\n\n採用案\n- 候補: {name} の提案『{head[:60]}』\n- 選定理由: {reason}"
 
-    return f"現時点の状況整理です。各担当から1案ずつ提案を受け、統括Mが要点を束ねました。\n{body}{adoption}"
+    # プレフィックスは呼出元で決定できないため、既定を返し、api_message 側で差し替え
+    return f"{SUMMARY_PREFIXES[0]}\n{body}{adoption}"
 
 def motivate_summary_short(role_ids: List[str], role_to_last: Dict[str, str], role_initial: Dict[str, str] | None = None, role_clar: Dict[str, Dict[str, str]] | None = None) -> str:
     bullets: List[str] = []
@@ -1235,6 +1309,22 @@ def motivate_summary_short(role_ids: List[str], role_to_last: Dict[str, str], ro
     if not bullets:
         return "要点整理: 続きを確認します。"
     return "要点整理:\n- " + "\n- ".join(bullets[:2])
+
+CONTINUE_PATTERNS = [
+    "議論を継続しますか？（はい/いいえ/メンバー指定）例:『CFOとPMで継続』『CFOだけ継続』『統括だけで続けて』",
+    "続けますか？（はい/いいえ/メンバー指定）例:『CFOとPMで継続』『統括だけで続けて』",
+    "この先も進めますか？（はい/いいえ/メンバー指定）例:『CFOとPMで』『統括だけで』",
+]
+
+def _rotating_continue_prompt(conv_id: str) -> str:
+    used = _recent_lane_texts(conv_id, "main")
+    # 直近未使用のものを選択
+    for i in range(len(CONTINUE_PATTERNS)):
+        cand = CONTINUE_PATTERNS[i]
+        if cand not in used:
+            return cand
+    # 全て出尽くしていたら最初の文面
+    return CONTINUE_PATTERNS[0]
 
 def _recent_main_context(conv_id: str, max_msgs: int = 6) -> str:
     """直近のメインレーン（あなた/統括M）のやり取りを短くまとめる。"""
@@ -1305,7 +1395,10 @@ def _soft_followup_prompt(conv_id: str, role_id: str, initial_head: str, turn_in
                 return alt
         # それでも重複するなら微変化させる
         return f"追問（{topic}）: {body} 具体例を1つ添えてください。"
-
+    # レーン内の直近重複も回避（同じ文面を連投しない）
+    lane_hist = _recent_lane_texts(conv_id, f"consult:{role_id}")
+    if cand in lane_hist:
+        return f"追問（{topic}）: {body}（重複回避のため観点を1つ変えて）"
     return cand
 
 def _is_substantive(text: str) -> bool:
@@ -1332,7 +1425,9 @@ def api_message(payload: MessageRequest):
     if not payload.text.strip(): raise HTTPException(400, "text is empty")
 
     out_events: List[Dict[str, Any]] = []
-    out_events.append(push_event(payload.conversation_id, "user", payload.text.strip(), lane="main"))
+    ev_user = push_event(payload.conversation_id, "user", payload.text.strip(), lane="main")
+    out_events.append(ev_user)
+    _remember_lane(payload.conversation_id, "main", ev_user.get("text") or "")
 
     # 直前に『継続しますか？』を出しており、今回の入力が「はい/いいえ」に該当する場合の分岐
     mains_prev = [e for e in EVENTS if e.get("conv_id") == payload.conversation_id and e.get("lane") == "main"]
@@ -1420,7 +1515,9 @@ def api_message(payload: MessageRequest):
     # 継続確認に対する『統括だけで続けて』等の入力を優先解釈
     if asked_continue and _detect_orchestrator_only(payload.text):
         ORCH_ONLY[payload.conversation_id] = True
-        out_events.append(push_event(payload.conversation_id, "motivator_ai", _orchestrator_main_reply(payload.text), lane="main"))
+        ev_orch = push_event(payload.conversation_id, "motivator_ai", _orchestrator_main_reply(payload.conversation_id, payload.text), lane="main")
+        out_events.append(ev_orch)
+        _remember_lane(payload.conversation_id, "main", ev_orch.get("text") or "")
         return FeedResponse(events=out_events)
 
     if asked_continue and is_no:
@@ -1451,7 +1548,9 @@ def api_message(payload: MessageRequest):
                         nm = ROLE_LABEL_JA.get(rid) or ROLES_BY_ID.get(rid, {}).get("title") or rid
                         missing_mentions.append(nm)
                 if missing_mentions:
-                    out_events.append(push_event(payload.conversation_id, "motivator_ai", f"次の役割は現在の参加メンバーにいません: {', '.join(missing_mentions)}。必要なら『設定』から追加できます。", lane="main"))
+                    ev_missing = push_event(payload.conversation_id, "motivator_ai", f"次の役割は現在の参加メンバーにいません: {', '.join(missing_mentions)}。必要なら『設定』から追加できます。", lane="main")
+                    out_events.append(ev_missing)
+                    _remember_lane(payload.conversation_id, "main", ev_missing.get("text") or "")
             except Exception:
                 pass
         else:
@@ -1477,9 +1576,13 @@ def api_message(payload: MessageRequest):
             try:
                 if roles:
                     names = [ROLE_LABEL_JA.get(r) or ROLES_BY_ID.get(r, {}).get("title") or r for r in roles]
-                    out_events.append(push_event(payload.conversation_id, "motivator_ai", f"専門スタッフを参加させます: {', '.join(names)}", lane="main"))
+                    ev_added = push_event(payload.conversation_id, "motivator_ai", f"専門スタッフを参加させます: {', '.join(names)}", lane="main")
+                    out_events.append(ev_added)
+                    _remember_lane(payload.conversation_id, "main", ev_added.get("text") or "")
                 else:
-                    out_events.append(push_event(payload.conversation_id, "motivator_ai", "参加可能な専門スタッフが見つかりませんでした。『設定』から追加してください。", lane="main"))
+                    ev_noadd = push_event(payload.conversation_id, "motivator_ai", "参加可能な専門スタッフが見つかりませんでした。『設定』から追加してください。", lane="main")
+                    out_events.append(ev_noadd)
+                    _remember_lane(payload.conversation_id, "main", ev_noadd.get("text") or "")
             except Exception:
                 pass
         else:
@@ -1492,7 +1595,9 @@ def api_message(payload: MessageRequest):
                 # 統括のみ応答（main のみ/相談なし）
                 ORCH_ONLY[payload.conversation_id] = True
                 reply = _orchestrator_main_reply(payload.conversation_id, payload.text)
-                out_events.append(push_event(payload.conversation_id, "motivator_ai", reply, lane="main"))
+                ev_only = push_event(payload.conversation_id, "motivator_ai", reply, lane="main")
+                out_events.append(ev_only)
+                _remember_lane(payload.conversation_id, "main", ev_only.get("text") or "")
                 return FeedResponse(events=out_events)
             # 通常選定
             roles = choose_roles_for_message(payload.conversation_id, payload.text, SELECT_LIMIT)
@@ -1507,11 +1612,15 @@ def api_message(payload: MessageRequest):
         if not (asked_continue and is_yes):
             ack = _ack_for_conv(payload.conversation_id, payload.text)
             if ack and ack.strip():
-                out_events.append(push_event(payload.conversation_id, "motivator_ai", ack, lane="main"))
+                ev_ack = push_event(payload.conversation_id, "motivator_ai", ack, lane="main")
+                out_events.append(ev_ack)
+                _remember_lane(payload.conversation_id, "main", ev_ack.get("text") or "")
     else:
         # 相談対象がゼロなら、統括のみで自然に継続（注意喚起は出さない）
         if not (asked_continue and is_no):
-            out_events.append(push_event(payload.conversation_id, "motivator_ai", _orchestrator_main_reply(payload.conversation_id, payload.text), lane="main"))
+            ev_orch_only = push_event(payload.conversation_id, "motivator_ai", _orchestrator_main_reply(payload.conversation_id, payload.text), lane="main")
+            out_events.append(ev_orch_only)
+            _remember_lane(payload.conversation_id, "main", ev_orch_only.get("text") or "")
             return FeedResponse(events=out_events)
     # 継続時は過去の初回提案ヘッド/直近返信をイベントから復元
     if asked_continue and is_yes:
@@ -1538,7 +1647,9 @@ def api_message(payload: MessageRequest):
             preface = f"専門職に意見を聞きます。議題: {payload.text.strip()}"
             if role_id == "cust_25895571":
                 preface += "（公開情報の収集→要点抽出→統括で取りまとめ）"
-            out_events.append(push_event(payload.conversation_id, "motivator_ai", preface, lane=lane))
+            ev_pref = push_event(payload.conversation_id, "motivator_ai", preface, lane=lane)
+            out_events.append(ev_pref)
+            _remember_lane(payload.conversation_id, lane, ev_pref.get("text") or "")
 
         # メンバー登録（自動選定であっても参加扱いにする）
         _add_member(payload.conversation_id, role_id)
@@ -1552,7 +1663,7 @@ def api_message(payload: MessageRequest):
             urls = [h.get("url") for h in hits if h.get("url")]  # type: ignore
         if urls:
             fetched: list[dict] = []
-            for u in urls:
+            for u in [x for x in urls if isinstance(x, str) and x]:
                 fetched.append(_fetch_url_text(u))
             if fetched:
                 snippet = "\n\n".join([f"[参照:{i+1}] {x['title']}\n{x['url']}\n---\n{x['text'][:800]}" for i,x in enumerate(fetched)])
@@ -1564,7 +1675,9 @@ def api_message(payload: MessageRequest):
             last_reply = role_to_last.get(role_id, "")
         else:
             reply = consult(role_id, utext)
-            out_events.append(push_event(payload.conversation_id, role_id, reply, lane=lane))
+            ev_reply = push_event(payload.conversation_id, role_id, reply, lane=lane)
+            out_events.append(ev_reply)
+            _remember_lane(payload.conversation_id, lane, ev_reply.get("text") or "")
             last_reply = reply
             # 初回提案を固定（未設定時のみ）
             if role_id not in role_initial:
@@ -1583,14 +1696,18 @@ def api_message(payload: MessageRequest):
         loops_to_run = max(0, min(_loops, _cap))
         for t in range(loops_to_run):
             ask = _soft_followup_prompt(payload.conversation_id, role_id, role_initial_head.get(role_id, ""), t)
-            out_events.append(push_event(payload.conversation_id, "motivator_ai", ask, lane=lane))
+            ev_ask = push_event(payload.conversation_id, "motivator_ai", ask, lane=lane)
+            out_events.append(ev_ask)
+            _remember_lane(payload.conversation_id, lane, ev_ask.get("text") or "")
             fup = consult(role_id, ask)
             # 補足として保存（ラベル付けなし／最大2点）
             lab = f"補足{t+1}"
             role_clar.setdefault(role_id, {})
             if _is_substantive(fup) and len(role_clar[role_id]) < 2:
                 role_clar[role_id][lab] = fup
-            out_events.append(push_event(payload.conversation_id, role_id, fup, lane=lane))
+            ev_fup = push_event(payload.conversation_id, role_id, fup, lane=lane)
+            out_events.append(ev_fup)
+            _remember_lane(payload.conversation_id, lane, ev_fup.get("text") or "")
             role_to_last[role_id] = fup
 
     # まとめ報告（統括M→ユーザー）。Noでの継続否定時はスキップ。
@@ -1601,10 +1718,22 @@ def api_message(payload: MessageRequest):
                 pass  # まとめを出さない
             elif style == "short":
                 summary = motivate_summary_short(roles, role_to_last, role_initial=role_initial, role_clar=role_clar)
-                out_events.append(push_event(payload.conversation_id, "motivator_ai", summary, lane="main"))
+                # 見出しローテーション（短縮版は先頭行を書き換え）
+                if summary.startswith("要点整理:"):
+                    # 要点整理: はそのまま利用
+                    pass
+                ev_sum_s = push_event(payload.conversation_id, "motivator_ai", summary, lane="main")
+                out_events.append(ev_sum_s)
+                _remember_lane(payload.conversation_id, "main", ev_sum_s.get("text") or "")
             else:
                 summary = motivate_summary(roles, role_to_last, role_initial=role_initial, role_clar=role_clar)
-                out_events.append(push_event(payload.conversation_id, "motivator_ai", summary, lane="main"))
+                # 先頭固定句をローテーションプレフィックスに差し替え
+                pref = _pick_summary_prefix(payload.conversation_id)
+                if summary.startswith(SUMMARY_PREFIXES[0]):
+                    summary = summary.replace(SUMMARY_PREFIXES[0], pref, 1)
+                ev_sum = push_event(payload.conversation_id, "motivator_ai", summary, lane="main")
+                out_events.append(ev_sum)
+                _remember_lane(payload.conversation_id, "main", ev_sum.get("text") or "")
     except Exception:
         pass
     # 司会より継続確認/分岐
@@ -1612,10 +1741,15 @@ def api_message(payload: MessageRequest):
         if asked_continue and is_no:
             # 今回は『いいえ』の回答。まとめ依頼は不適切なので出さない→自然な誘導質問に置換。
             prompt = _next_action_prompt(payload.text)
-            out_events.append(push_event(payload.conversation_id, "motivator_ai", prompt, lane="main"))
+            ev_prompt = push_event(payload.conversation_id, "motivator_ai", prompt, lane="main")
+            out_events.append(ev_prompt)
+            _remember_lane(payload.conversation_id, "main", ev_prompt.get("text") or "")
         elif roles:
             # 相談と所定回数のフォローアップが完了した後にのみ継続可否を確認
-            out_events.append(push_event(payload.conversation_id, "motivator_ai", "議論を継続しますか？（はい/いいえ/メンバー指定）例:『CFOとPMで継続』『CFOだけ継続』『統括だけで続けて』", lane="main"))
+            cont_msg = _rotating_continue_prompt(payload.conversation_id)
+            ev_cont = push_event(payload.conversation_id, "motivator_ai", cont_msg, lane="main")
+            out_events.append(ev_cont)
+            _remember_lane(payload.conversation_id, "main", ev_cont.get("text") or "")
     except Exception:
         pass
     return FeedResponse(events=out_events)
@@ -1871,6 +2005,7 @@ def api_health():
     }
 
 class AddAgentRequest(BaseModel):
+    conversation_id: str
     role_id: str
 
 @app.post("/api/add-agent", response_model=FeedResponse)
@@ -1889,7 +2024,7 @@ def api_add_agent(payload: AddAgentRequest):
     _add_member(payload.conversation_id, payload.role_id)
     if missing:
         miss_names = [ROLE_LABEL_JA.get(m) or ROLES_BY_ID.get(m, {}).get("title") or m for m in missing]
-        evs.append(push_event(payload.conversation_id, "motivator_ai", f"警告: {name} の前提ロールが不足しています → {', '.join(miss_names)}", lane="main"))
+    evs.append(push_event(payload.conversation_id, "motivator_ai", f"警告: {name} の前提ロールが不足しています → {', '.join(miss_names)}", lane="main"))
     return FeedResponse(events=evs)
 
 class AddAgentsRequest(BaseModel):
