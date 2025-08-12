@@ -1,11 +1,1 @@
-I'm ready to help you with your software engineering tasks! I can assist with:
-
-- Code analysis and debugging
-- Adding new features
-- Refactoring code
-- Running tests and builds
-- File searches and navigation
-- Git operations
-- And much more
-
-What would you like me to help you with today?
+[ORCH roles=idea_ai,writer_ai] 新規機能の良い名前を3案で理由つき。

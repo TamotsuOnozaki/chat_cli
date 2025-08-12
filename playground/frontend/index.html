@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-store" />
+  <title>統括マネージャーとの会話</title>
+  <link rel="stylesheet" href="./style.css?v=17" />
+  </head>
+<body>
+  <header>
+  <h1>統括マネージャーとの会話</h1>
+  <button id="new-conv" type="button">新規会話</button>
+  <button id="rec-btn" type="button">おすすめAI</button>
+  <button id="orch-btn" type="button">統括設定</button>
+    <span id="status" class="status">connecting...</span>
+  </header>
+  <nav id="tabbar" class="tabs"></nav>
+
+  <main id="board" class="board">
+  <section class="col" id="col-left">
+      <!-- メインパネルがここに入る -->
+    </section>
+  <section class="col" id="col-right-root"></section>
+  </main>
+
+  <div id="rec-modal" class="modal" hidden>
+    <div class="modal-body">
+      <div class="modal-head">
+        <span>おすすめの専門職</span>
+  <button id="rec-new" type="button">新規作成</button>
+  <button id="rec-close" type="button">閉じる</button>
+      </div>
+      <div id="rec-grid" class="card-grid"></div>
+    </div>
+  </div>
+
+  <div id="orch-modal" class="modal" hidden>
+    <div class="modal-body">
+      <div class="modal-head">
+        <span>統括（オーケストレーター）設定</span>
+        <button id="orch-close" type="button">閉じる</button>
+      </div>
+      <div class="form-grid" style="display:grid;grid-template-columns:140px 1fr;gap:8px;align-items:center">
+        <label>開幕メッセージ</label>
+        <textarea id="orch-opening" rows="2" placeholder="例: 統括Mです。今日はどんな議題について進めますか？"></textarea>
+        <label>追質問回数</label>
+        <input id="orch-followups" type="number" min="1" max="8" />
+        <label>要約スタイル</label>
+        <select id="orch-summary">
+          <option value="default">通常（詳細）</option>
+          <option value="short">短く</option>
+          <option value="none">出さない</option>
+        </select>
+        <label>相槌（research）</label>
+        <input id="orch-ack-research" placeholder="研究系トピックへの相槌（任意）" />
+        <label>相槌（plan）</label>
+        <input id="orch-ack-plan" placeholder="計画/進行トピックへの相槌（任意）" />
+        <label>相槌（tech）</label>
+        <input id="orch-ack-tech" placeholder="技術/設計トピックへの相槌（任意）" />
+        <label>相槌（gtm）</label>
+        <input id="orch-ack-gtm" placeholder="GTM/マーケ系への相槌（任意）" />
+        <label>相槌（general）</label>
+        <input id="orch-ack-general" placeholder="一般トピックへの相槌（任意）" />
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+        <button id="orch-save" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./main.js?v=17"></script>
+</body>
+</html>
+
+

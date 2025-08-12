@@ -1,0 +1,6 @@
+{
+  "opening_message": "統括マネージャーです。今日はどんな御用ですか？",
+  "followup_turns": 5,
+  "acks": {},
+  "summary_style": "none"
+}

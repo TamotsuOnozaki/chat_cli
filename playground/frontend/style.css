@@ -1,0 +1,103 @@
+:root { --bg:#0b1020; --card:#121a2b; --fg:#e6ecff; --muted:#99a3c2; --accent:#7aa2ff; }
+*{ box-sizing:border-box; }
+body{ margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--fg); }
+header{ display:flex; gap:12px; align-items:center; padding:12px 16px; position:sticky; top:0; background:linear-gradient(180deg, rgba(11,16,32,.95), rgba(11,16,32,.65)); backdrop-filter: blur(6px); border-bottom:1px solid #1e2a45; }
+header h1{ font-size:18px; margin:0; }
+header button{ background:var(--accent); color:#08122b; border:none; padding:8px 12px; border-radius:8px; font-weight:700; cursor:pointer; }
+.status{ color:var(--muted); font-size:12px; }
+.board{ display:grid; grid-template-columns: 1fr 1fr; gap:12px; padding:12px; align-items:start; }
+.col{ display:flex; flex-direction:column; gap:12px; }
+.col h2{ display:none; }
+.panel{ background:var(--card); border:1px solid #1e2a45; border-radius:12px; display:flex; flex-direction:column; min-height:360px; max-height:70vh; }
+.panel header{ display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border-bottom:1px solid #1e2a45; position:static; background:none; }
+.stream{ padding:12px; overflow:auto; display:flex; flex-direction:column; gap:8px; }
+.msg{ padding:10px 12px; border-radius:10px; white-space:pre-wrap; }
+.msg .name{ display:block; font-size:12px; color:var(--muted); margin-bottom:4px; opacity:0.9; }
+.msg .text{ white-space:pre-wrap; }
+
+/* 画面左下に重なる透かしが見える場合の保険: 固定要素は使っていないため、念のため該当クラスを強制非表示 */
+.watermark, .footer-hint, .hint-label { display:none !important; }
+.msg.user{ background:#203055; }
+.msg.motivator_ai{ background:#1a2d1f; border:1px solid #2d4833; }
+.msg.idea_ai,.msg.writer_ai,.msg.proof_ai,.msg.pm_ai{ background:#1d263f; }
+.inputbar{ display:flex; gap:8px; padding:12px; border-top:1px solid #1e2a45; }
+.inputbar input{ flex:1; padding:10px 12px; border-radius:8px; border:1px solid #2a3b64; background:#0d152a; color:var(--fg); }
+.inputbar button{ background:var(--accent); color:#08122b; border:none; padding:10px 12px; border-radius:8px; font-weight:700; cursor:pointer; }
+.small{ color:var(--muted); font-size:12px; }
+.modal{ position:fixed; inset:0; background:rgba(0,0,0,.5); display:none; align-items:center; justify-content:center; z-index:9999; }
+.modal.open{ display:flex; }
+.modal[hidden]{ display:none !important; }
+.modal .modal-body{ pointer-events:auto; }
+.modal .modal-body{ background:var(--card); border:1px solid #1e2a45; border-radius:12px; padding:12px; width:min(960px, 92vw); max-height:86vh; display:flex; flex-direction:column; gap:10px; overflow:auto; }
+.modal .modal-head{ display:flex; align-items:center; justify-content:space-between; }
+.card-grid{ display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px; }
+/* 推薦モーダルでフェーズ帯を縦に並べる */
+#rec-grid{ display:flex; flex-direction:column; gap:12px; }
+.card{ border:1px solid #1e2a45; border-radius:10px; padding:10px; display:flex; flex-direction:column; gap:6px; position:relative; }
+.card > .title{ margin-bottom:4px; }
+.card .title{ font-weight:700; }
+.card .desc{ color:var(--muted); font-size:13px; }
+.card button{ align-self:flex-end; background:var(--accent); color:#08122b; border:none; padding:8px 10px; border-radius:8px; font-weight:700; cursor:pointer; }
+.card .icon{ width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:18px; }
+/* カード右上の選択チェックボックス */
+.card input.select-box{ position:absolute; top:8px; right:8px; width:18px; height:18px; cursor:pointer; }
+.card[data-addable="0"] input.select-box{ opacity:.4; cursor:not-allowed; }
+/* 新規作成フォームのアイコンプレビューを少し大きく */
+.card .config-form .icon{ width:44px; height:44px; font-size:22px; margin-bottom:4px; }
+/* カード内設定フォーム */
+.card .config-form{ display:flex; flex-direction:column; gap:6px; border-top:1px solid #1e2a45; padding-top:8px; }
+.card .config-form[hidden]{ display:none !important; }
+.card .config-form input{ width:100%; padding:8px 10px; border-radius:8px; border:1px solid #2a3b64; background:#0d152a; color:var(--fg); }
+.card .config-actions{ display:flex; gap:8px; justify-content:flex-end; }
+.card .profile{ color:var(--muted); font-size:12px; line-height:1.5; white-space:pre-wrap; }
+
+/* モーダル内のカードフッターボタンが被らないよう余白確保 */
+.modal .card-grid{ padding-bottom:16px; }
+
+/* おすすめモーダル内のプリセットボタン行の重なり解消 */
+.card .preset-row{ display:flex; flex-wrap:wrap; gap:8px; }
+.card .preset-row button{ margin:0; align-self:auto; }
+
+/* フェーズ別の帯 */
+.phase{ border:1px solid #1e2a45; border-radius:12px; padding:10px; display:flex; flex-direction:column; gap:8px; }
+.phase h3{ margin:0; font-size:13px; color:var(--muted); }
+.phase .phase-grid{ display:flex; gap:10px; overflow:auto; padding-bottom:6px; }
+.phase.phase-1{ background:rgba(60,120,255,.10); }
+.phase.phase-2{ background:rgba(60,200,160,.08); }
+.phase.phase-3{ background:rgba(255,180,60,.08); }
+
+/* 相談ウィンドウ（右カラム） */
+.consult{ background:var(--card); border:1px solid #1e2a45; border-radius:10px; display:flex; flex-direction:column; min-height:140px; max-height:60vh; }
+.consult > header{ display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-bottom:1px solid #1e2a45; color:var(--muted); font-size:12px; }
+.cstream{ padding:10px; overflow:auto; display:flex; flex-direction:column; gap:8px; }
+
+/* 新ロールの色味 */
+.msg.product_manager_ai{ background:#1d2e3f; border:1px solid #2a4b6a; }
+.msg.project_manager_ai{ background:#1f2d3a; border:1px solid #35516b; }
+.msg.architect_ai{ background:#1a2838; border:1px solid #2c4664; }
+.msg.dev_ai{ background:#22283a; border:1px solid #3a4a7a; }
+
+/* タブUI */
+.tabs{ display:flex; gap:6px; padding:6px 12px; border-bottom:1px solid #1e2a45; background:rgba(0,0,0,.15); position:sticky; top:48px; z-index:9; }
+.tabs .tab{ background:#16223a; border:1px solid #1e2a45; color:var(--fg); padding:6px 8px; border-radius:8px 8px 0 0; cursor:pointer; display:flex; gap:8px; align-items:center; }
+.tabs .tab.active{ background:var(--card); border-bottom-color: var(--card); font-weight:700; }
+.tabs .tab .close{ background:transparent; color:var(--muted); border:none; cursor:pointer; }
+
+/* 汎用: 非表示 */
+.hidden{ display:none !important; }
+
+/* 選択状態のカード強調 */
+.card.selected{ outline:2px solid var(--accent); }
+
+/* おすすめモーダルの一括参加バー */
+.bulkbar{ display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 4px; border-top:1px solid #1e2a45; position:sticky; bottom:0; background:rgba(0,0,0,.3); }
+
+/* 継続指定UI（メイン吹き出し内） */
+.continue-ui{ margin-top:8px; padding:8px; border:1px dashed #2a3b64; border-radius:8px; background:#0d152a; }
+.continue-ui .continue-list{ display:flex; flex-wrap:wrap; gap:8px 14px; margin:6px 0; }
+.continue-ui .continue-actions{ display:flex; gap:8px; }
+
+/* ミニダイアログ */
+dialog.mini-dialog::backdrop{ background: rgba(0,0,0,.5); }
+dialog.mini-dialog{ border:1px solid #1e2a45; border-radius:12px; padding:12px; background:var(--card); color:var(--fg); }
+dialog.mini-dialog input, dialog.mini-dialog select{ width:100%; padding:8px 10px; border-radius:8px; border:1px solid #2a3b64; background:#0d152a; color:var(--fg); }
