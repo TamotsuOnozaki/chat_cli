@@ -1,0 +1,96 @@
+# 協働AIシステム 仕様書（株式会社ゼータラボ）
+作成日: 2025-08-12 / 作成者: 小野崎社長
+
+## 0. 目的（ゴール）
+- 複数のAI（役割ごと）が**同じ画面**で議論し、企画→文章→校正→実装まで進める。
+- 私（小野崎社長）は**いつでも割り込み**できる。最後は**要点を自動で報告**。
+- 自宅PCと会社PCで、**ワンクリック起動**（VSCodeから即スタート）。
+
+## 1. 役割（エージェント）
+- IdeaAI（企画）: 新しい案を出す。短くてOK。
+- WriterAI（執筆）: 見出し→本文を作る。読みやすさ重視。
+- ProofAI（校正）: 誤字・表現・構成を直す。理由も一言。
+- DevAI（実装）: 小さいサンプルコード。リスク注意点も添える。
+- PM補助（進行）: 議論の順番管理、要約、ToDo化。
+- 統括M（モチベーター）: 私との窓口。全体をまとめ、次の一手を提案。
+
+※ 将来追加（例）
+- CFO/財務、事業開発、営業/マーケ、UI/UX、法務、リサーチ など
+
+## 2. 使うAI（プロバイダ）
+- OpenAI（ChatGPT）: 文章・要約・進行の基本
+- Anthropic（Claude）: 長文/構成の安定
+- Google（Gemini）: 下調べ・リサーチ補助
+- 使い分けルールは「役割カード」に書く（recommended_api）。
+
+## 3. 起動と構成（MVP）
+- Backend: FastAPI（`backend/app.py`）
+- Frontend: HTML/CSS/JS（`frontend/`。ポーリングで`/api/feed`を見る）
+- 起動: `run.ps1` をVSCodeタスクから実行（ポート自動選択、ブラウザ自動オープン）
+- 設定: `.env` にAPIキー。PCごとに置く（Gitに上げない）
+
+## 4. 画面イメージ（最低限）
+- 左: 会話ログ（誰が話したか色分け）
+- 右: 推奨メンバー（カード表示 / ワンクリックで参加）
+- 上: 私の入力欄（Enterで送信）
+- 下: ステータス（実行中/完了、最終要約ボタン）
+
+## 5. 会話の流れ（基本）
+1) 私がテーマを書く  
+2) 統括Mが短く方向付け  
+3) 必要な役割を自動選定（または私がクリックで追加）  
+4) 各AIが順に発言 → 統括Mが**短い追い質問**を回す（上限 N 回）  
+5) 統括Mが**要約＋次の一手**を提示  
+6) 私が「続ける / メンバー指定で続ける / 終了」を選ぶ
+
+## 6. ファイル入出力（既存連携の継続）
+- 監視ファイル:
+  - `output_claude_writer.txt` を監視（更新されたら処理）
+  - 返信は `input_claude_writer.txt` に書き戻す
+- 多エージェントは `multi_agent_orchestrator.py` で管理
+- ログ: `logs/orch_YYYY-MM-DD.jsonl` に追記
+
+## 7. 役割カード（例）
+- 置き場所: `backend/roles.json` と `backend/roles_custom.json`
+- 例（短縮版イメージ）
+  ```json
+  {
+    "roles": [
+      {
+        "id": "idea_ai",
+        "title": "企画アドバイザー",
+        "recommended_api": "openai",
+        "system_prompt": "あなたは企画担当。新しい案を短く出す。市場や目的に触れる。"
+      },
+      {
+        "id": "writer_ai",
+        "title": "ライターAI",
+        "recommended_api": "openai",
+        "system_prompt": "見出し→本文。わかりやすく、短い段落。"
+      },
+      {
+        "id": "proof_ai",
+        "title": "校正AI",
+        "recommended_api": "anthropic",
+        "system_prompt": "誤字や表現を直し、改善理由を一言。"
+      },
+      {
+        "id": "dev_ai",
+        "title": "開発エンジニア",
+        "recommended_api": "gemini",
+        "system_prompt": "小さなサンプルコード。注意点も1つ書く。"
+      },
+      {
+        "id": "pm_ai",
+        "title": "全体進行",
+        "recommended_api": "openai",
+        "system_prompt": "順番管理、タスク化、要約。"
+      },
+      {
+        "id": "motivator_ai",
+        "title": "統括M",
+        "recommended_api": "openai",
+        "system_prompt": "私の窓口。全体をまとめ、次の一手を提案。"
+      }
+    ]
+  }

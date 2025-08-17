@@ -1,5 +1,7 @@
 .env 
 .env
+chat_cli.env
+playground/.env
 __pycache__/
 .venv/
 *.pyc
